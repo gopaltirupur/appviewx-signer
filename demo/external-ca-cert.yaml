@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: external-ca-cert
+  namespace: istio-system
+data:
+  root-cert.pem: "BASE64 CONTENT HERE"
