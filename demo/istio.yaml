@@ -1,0 +1,47 @@
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+spec:
+  components:
+    base:
+      k8s:
+        overlays:
+          # Amend ClusterRole to add permission for istiod to approve certificate signing by custom signer
+          - kind: ClusterRole
+            name: istiod-istio-system
+            patches:
+              - path: rules[-1]
+                value: |
+                  apiGroups:
+                  - certificates.k8s.io
+                  resourceNames:
+                  - example.com/foo     #Replace Signer Name
+                  resources:
+                  - signers
+                  verbs:
+                  - approve
+                  - sign
+    pilot:
+      k8s:
+        env:
+          # Indicate to Istiod that we use an external signer
+          - name: EXTERNAL_CA
+            value: ISTIOD_RA_KUBERNETES_API
+          # Indicate to Istiod the external k8s Signer Name
+          - name: K8S_SIGNER
+            value: example.com/foo     #Repalce Signer Name
+        overlays:
+        - kind: Deployment
+          name: istiod
+          patches:
+            - path: spec.template.spec.containers[0].volumeMounts[-1]
+              value: |
+                # Mount external CA certificate into Istiod
+                name: external-ca-cert
+                mountPath: /etc/external-ca-cert
+                readOnly: true
+            - path: spec.template.spec.volumes[-1]
+              value: |
+                name: external-ca-cert
+                secret:
+                  secretName: external-ca-cert
+                  optional: true
