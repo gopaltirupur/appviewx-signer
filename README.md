@@ -1,18 +1,18 @@
-AppViewX k8s Operator
+AppViewX Istio-k8s Signer
 =================
 
 With Kubernetes 1.18, there is [*a certification signing request (CSR) API*](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/)
 feature, which allows for automation of certificate request and retrieval from certification authorities. Istiod acts as the Registration Authority to manage updates for a CSR resource.
 
-The one form of integration options of Istio with AppViewX capitalize the K8s CSR feature by implementing a Kubernetes operator where the CSR received by the Istiod is sent to the AppViewX Kubernetes operator.
+The one form of integration options of Istio with AppViewX capitalize the K8s CSR feature, where the CSR received by the Istiod is sent to the AppViewX Kubernetes signer.
 
 The operator has the external certificate authority signer implementation which enables the CSR to be signed by any custom Certificate Authority configured in the AppViewX Cert+ product.
 
-![AppViewX-Istio-K8s-Operator]([https://github.com/vigneshkathir/appviewx-signer/blob/main/images/AppViewX-Istio-K8s-Operator.jpeg](https://github.com/vigneshkathir/appviewx-signer/blob/main/images/AppViewX-Istio-K8s-Operator.jpeg))
+![AppViewX-Istio-K8s Signer](https://github.com/vigneshkathir/appviewx-signer/blob/main/images/AppViewX-Istio-K8s-Operator.jpeg)
 
 Integration Prerequisites 
 ===========================
-Before configuring the AppViewX-Istio K8s operator, the below prerequisites should be validated.
+Before configuring the AppViewX-Istio K8s signer, the below prerequisites should be validated.
 
  - [ ] Cluster running Kubernetes with 1.18+ version.
  - [ ] Download and Install Istio version 1.8+.
@@ -20,13 +20,13 @@ Before configuring the AppViewX-Istio K8s operator, the below prerequisites shou
 
 > Note : Existing customers reach us @ help@appviewx.com
 
-AppViewX-Istio K8s Operator Configuration
+AppViewX-Istio K8s Signer Configuration
 =========================================
 
 Installation Steps
 ------------------
 
--    Download appviewx-signer from the git to the K8s master node
+-    Download appviewx-signer from the github.com to the K8s master node
 	 ```bash
      git clone https://github.com/AppViewX/appviewx-signer.git
 	   ```
@@ -37,9 +37,7 @@ Installation Steps
     ```
     > Note : Host details and credentials will be shared upon signup / registration.
 
-- Create a kubernetes secret to host the Signing Certificate Authority.
-
-- Concatenate the Root CA and the Intermediate CA to base64 format 
+- Create a kubernetes secret to host the Signing Certificate Authority by concatenating the Root CA and the Intermediate CA to base64 format.
   ```bash
    cat <installdirectory>/appviewx-signer/demo/RootCA.crt <installdirectory>/appviewx-signer/demo/SUBCA.crt | base64
   ```
@@ -55,7 +53,7 @@ Installation Steps
 	    root-cert.pem: "BASE64 CONTENT HERE"
 	  ```
 
--   Create the secret with the command 
+-   Create the istio namespace and kubernetes secret with the command 
 
     > “kubectl create namespace  istio-system ; kubectl apply -f external-ca-cert.yaml”.
 
@@ -112,7 +110,7 @@ The below steps are executed to install Istio on the kubernetes cluster and enab
 	            value: ISTIOD_RA_KUBERNETES_API
 	          # Indicate to Istiod the external k8s Signer Name
 	          - name: K8S_SIGNER
-	            value: example.com/foo     #Repalce Signer Name
+	            value: example.com/foo     #Replace Signer Name
 	        overlays:
 	        - kind: Deployment
 	          name: istiod
@@ -138,7 +136,7 @@ The below steps are executed to install Istio on the kubernetes cluster and enab
 Test Environment Setup 
 -----------------------
 
-To validate and verify the mTLS certificates issued by a custom Certificate Authority, Users can install a sample application using the below script and verify the custom certificate signed.
+To validate and verify the mTLS certificates issued by a custom Certificate Authority, users can install a sample application using the below script and verify the custom certificate signed.
 
 The script installs a sample httpbin and sleep application in a separate namespace called **foo** and enrolls mTLS certificates from AppViewX. Once installed the script verifies the certificate chain and displays the certificate serial number which can be cross verified in the AppViewX CERT+ inventory.
 
@@ -146,6 +144,4 @@ Run the below shell script.
 ```bash
 ./mTLSexternalcertvalidation.sh
 ```
-
-
 
