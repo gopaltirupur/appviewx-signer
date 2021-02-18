@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"signer-ca/appviewx/certs"
+	"github.com/gopaltirupur/appviewx-signer/appviewx/certs"
 )
 
 func TestMainAppViewX(t *testing.T) {

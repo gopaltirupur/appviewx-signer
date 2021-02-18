@@ -27,3 +27,8 @@ config/e2e/tls.csr
 main
 docs/demos/signer-ca.demo1.cast
 docs/demos/kubelet-signer/kubelet-signer-demo.cast
+manager
+config/e2e/tls.key
+config/e2e/kustomization.yaml
+*.yaml
+.vscode/settings.json
