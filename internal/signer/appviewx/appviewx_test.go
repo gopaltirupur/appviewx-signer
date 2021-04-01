@@ -3,13 +3,11 @@ package appviewx
 import (
 	"os"
 	"testing"
-
-	"github.com/gopaltirupur/appviewx-signer/appviewx/certs"
 )
 
 func TestMainAppViewX(t *testing.T) {
 	os.Setenv("APPVIEWX_ENV_CERTIFICATE_AUTHORITY", "AppViewX")
-	certs.CurrentCA = os.Getenv("APPVIEWX_ENV_CERTIFICATE_AUTHORITY")
+	CurrentCA = os.Getenv("APPVIEWX_ENV_CERTIFICATE_AUTHORITY")
 
 	os.Setenv("LOG_LEVEL", "DEBUG")
 	os.Setenv("APPVIEWX_ENV_HOST", "192.168.95.157")

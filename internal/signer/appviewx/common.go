@@ -1,4 +1,4 @@
-package common
+package appviewx
 
 import (
 	"bytes"
@@ -8,13 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
-	"log"
-	"math/rand"
 	"net/http"
-	"strings"
 	"time"
-
-	"go.uber.org/zap"
 )
 
 type SessionPayload struct{}
@@ -53,10 +48,12 @@ type SessionResponseInternal struct {
 }
 
 type CreateCertificatePayload struct {
-	CaConnectorInfo   CaConnectorInfo   `json:"caConnectorInfo"`
-	CertificateGroup  CertificateGroup  `json:"certificateGroup"`
-	UploadCSRDetails  UploadCSRDetails  `json:"uploadCsrDetails"`
-	CertificateFormat CertificateFormat `json:"certificateFormat"`
+	WorkFlowType      string             `json:"workflowType"`
+	UniqueCertificate bool               `json:"uniqueCertificate"`
+	CaConnectorInfo   CaConnectorInfo    `json:"caConnectorInfo"`
+	CertificateGroup  CertificateGroup   `json:"certificateGroup"`
+	UploadCSRDetails  UploadCSRDetails   `json:"uploadCsrDetails"`
+	CertificateFormat *CertificateFormat `json:"certificateFormat"`
 }
 
 type CertificateFormat struct {
@@ -65,8 +62,8 @@ type CertificateFormat struct {
 }
 
 type UploadCSRDetails struct {
-	CSRContent string `json:"csrContent"`
-	Category   string `json:"category"`
+	CSRContent *string `json:"csrContent"`
+	Category   string  `json:"category"`
 }
 
 type CertificateGroup struct {
@@ -74,29 +71,30 @@ type CertificateGroup struct {
 }
 
 type CaConnectorInfo struct {
-	CertificateAuthority   string      `json:"certificateAuthority"`
-	CaSettingName          string      `json:"caSettingName"`
-	Name                   string      `json:"name,omitempty"`
-	GenericFields          interface{} `json:"genericFields"`
-	VendorSpecificDetails  interface{} `json:"vendorSpecificDetails"`
-	CustomAttributes       interface{} `json:"customAttributes"`
-	CertAttributes         interface{} `json:"certAttributes"`
-	ValidityInDays         int         `json:"validityInDays"`
-	CertificateProfileName string      `json:"certificateProfileName"`
+	CertificateAuthority   string                 `json:"certificateAuthority"`
+	CaSettingName          string                 `json:"caSettingName"`
+	Name                   string                 `json:"name,omitempty"`
+	GenericFields          interface{}            `json:"genericFields"`
+	VendorSpecificDetails  map[string]interface{} `json:"vendorSpecificDetails"`
+	CustomAttributes       interface{}            `json:"customAttributes"`
+	CertAttributes         interface{}            `json:"certAttributes"`
+	ValidityInDays         int                    `json:"validityInDays"`
+	CertificateProfileName string                 `json:"certificateProfileName"`
+	CsrParameters          interface{}            `json:"csrParameters"`
 }
 
 type CreateCertificateResponse struct {
-	Response      CreateCertificateResponseInternal `json:"response"`
-	Message       string                            `json:"message"`
-	AppStatusCode interface{}                       `json:"appStatusCode"`
-	Tags          interface{}                       `json:"tags"`
-	Headers       interface{}                       `json:"headers"`
+	Response      *CreateCertificateResponseInternal `json:"response"`
+	Message       string                             `json:"message"`
+	AppStatusCode interface{}                        `json:"appStatusCode"`
+	Tags          interface{}                        `json:"tags"`
+	Headers       interface{}                        `json:"headers"`
 }
 
 type CreateCertificateResponseInternal struct {
-	ResourceID         string `json:"resourceId"`
-	RequestId          string `json:"requestId"`
-	CertificateContent string `json:"certificateContent"`
+	ResourceID         *string `json:"resourceId"`
+	RequestId          *string `json:"requestId"`
+	CertificateContent *string `json:"certificateContent"`
 }
 
 type DownloadCertificateResponse struct {
@@ -113,54 +111,57 @@ type DownloadCertificateResponseInternal struct {
 	CommonName          string `json:"commonName"`
 	SerialNumber        string `json:"serialNumber"`
 	Format              string `json:"format"`
-	success             bool   `json:"success"`
+	Success             bool   `json:"success"`
 }
 
-func GenerateURL(ctx context.Context, isHTTPS bool, appviewxHost string, appviewxPort int, subPath string, queryParam map[string]string) (output string, err error) {
+func GenerateURL(ctx context.Context, isHTTPS bool, appviewxHost string, appviewxPort int, subPath string, queryParam map[string]string) (string, error) {
+	buffer := bytes.Buffer{}
 	if isHTTPS {
-		output += "https://"
+		buffer.WriteString("https://")
 	} else {
-		output += "http://"
+		buffer.WriteString("http://")
 	}
 
 	if len(appviewxHost) > 0 {
-		output += appviewxHost
+		buffer.WriteString(appviewxHost)
 	} else {
 		return "", errors.New("Error in appviewxHost : " + appviewxHost)
 	}
 
 	if appviewxPort > 0 {
-		output += (":" + fmt.Sprintf("%d", appviewxPort))
+		buffer.WriteString((":" + fmt.Sprintf("%d", appviewxPort)))
 	} else {
 		return "", errors.New("Error in appviewxPort : " + fmt.Sprintf("%d", appviewxPort))
 	}
 
-	output += "/avxapi/"
+	buffer.WriteString("/avxapi/")
 
-	output += subPath
+	buffer.WriteString(subPath)
 
 	isItFirstTime := true
 	for key, value := range queryParam {
 		if isItFirstTime {
 			isItFirstTime = false
-			output += "?"
+			buffer.WriteString("?")
 		} else {
-			output += "&"
+			buffer.WriteString("&")
 		}
-		output += (key + "=" + value)
+		buffer.WriteString((key + "=" + value))
 	}
-	log.Printf("Constructed URL : " + output)
-	return
+	return buffer.String(), nil
 }
 
-func MakePostCallAndReturnResponse(ctx context.Context, url string, payload interface{}, additionalRequestHeaders map[string]string) (output []byte, statusCode int, err error) {
-	log.Printf("url : " + url)
+func (signer *ApViewXSigner) MakePostCallAndReturnResponse(ctx context.Context, url string, payload interface{}, additionalRequestHeaders map[string]string) (output []byte, statusCode int, err error) {
+
+	log := signer.Log.WithName("make-call-post").WithValues("certificatesigningrequest", ctx.Value("name"))
+
+	log.V(1).Info("url : " + url)
 	requestPayloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("loginAndGetSessionID - Error in Marshalling the request Payload ", zap.Error(err))
+		log.Error(err, "loginAndGetSessionID - Error in Marshalling the request Payload ")
 		return nil, 0, err
 	}
-	log.Printf("Payload : " + string(requestPayloadBytes))
+	log.V(1).Info("Payload : " + string(requestPayloadBytes))
 
 	client := http.Client{
 		Transport: &http.Transport{
@@ -172,7 +173,7 @@ func MakePostCallAndReturnResponse(ctx context.Context, url string, payload inte
 
 	request, err := http.NewRequest("POST", url, bytes.NewBuffer(requestPayloadBytes))
 	if err != nil {
-		log.Printf("Error in creating Post request ", zap.Error(err))
+		log.Error(err, "Error in creating Post request ")
 		return nil, 0, err
 	}
 	request.Header.Set("Content-Type", "application/json")
@@ -184,7 +185,7 @@ func MakePostCallAndReturnResponse(ctx context.Context, url string, payload inte
 
 	response, err := client.Do(request)
 	if err != nil {
-		log.Printf("Error in making http request : ", zap.Error(err))
+		log.Error(err, "Error in making http request : ")
 		return nil, 0, err
 	}
 	defer response.Body.Close()
@@ -192,15 +193,18 @@ func MakePostCallAndReturnResponse(ctx context.Context, url string, payload inte
 
 	body, err := ioutil.ReadAll(response.Body)
 	if err != nil || len(body) <= 0 {
-		log.Printf("Error in reading the response : ", zap.Error(err))
+		log.Error(err, "Error in reading the response : ")
 		return nil, 0, err
 	}
 	output = body
 	return
 }
 
-func MakeGetCallAndReturnResponse(ctx context.Context, url string, additionalRequestHeaders map[string]string) (output []byte, err error) {
-	log.Printf("url : " + url)
+func (signer *ApViewXSigner) MakeGetCallAndReturnResponse(ctx context.Context, url string, additionalRequestHeaders map[string]string) (output []byte, err error) {
+
+	log := signer.Log.WithName("make-call-get").WithValues("certificatesigningrequest", ctx.Value("name"))
+
+	log.V(1).Info("url : " + url)
 	client := http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
@@ -211,7 +215,7 @@ func MakeGetCallAndReturnResponse(ctx context.Context, url string, additionalReq
 
 	request, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		log.Printf("Error in creating Post request ", zap.Error(err))
+		log.Error(err, "Error in creating Post request ")
 		return nil, err
 	}
 	request.Header.Set("Content-Type", "application/json")
@@ -223,50 +227,16 @@ func MakeGetCallAndReturnResponse(ctx context.Context, url string, additionalReq
 
 	response, err := client.Do(request)
 	if err != nil {
-		log.Printf("Error in making http request : ", zap.Error(err))
+		log.Error(err, "Error in making http request : ")
 		return nil, err
 	}
 	defer response.Body.Close()
 
 	body, err := ioutil.ReadAll(response.Body)
 	if err != nil || len(body) <= 0 {
-		log.Printf("Error in reading the response : ", zap.Error(err))
+		log.Error(err, "Error in reading the response : ")
 		return nil, err
 	}
 	output = body
-	return
-}
-
-func GetCertChainCertificate(ctx context.Context, certificateContents string) (certificate string) {
-	fileContentsString := string(certificateContents)
-	fileContentsArr := strings.Split(fileContentsString, "-----END CERTIFICATE-----")
-
-	certificate = (strings.Trim(fileContentsArr[0], "\n"))
-	certificate += "\n-----END CERTIFICATE-----"
-
-	log.Printf("GetCertChainCertificate : " + string(certificate))
-
-	// for _, cert := range fileContentsArr[:len(fileContentsArr)-2] {
-	// 	certificate += ("\n\n" + strings.Trim(cert, "\n"))
-	// 	certificate += "\n-----END CERTIFICATE-----"
-	// 	// return cert
-	// }
-	return
-}
-
-func GetRandomString(ctx context.Context) (output string) {
-	characterSet := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	seededRand := rand.New(rand.NewSource(time.Now().UnixNano()))
-
-	length := 10
-	b := make([]byte, length)
-	for i := range b {
-		b[i] = characterSet[seededRand.Intn(len(characterSet))]
-	}
-	return string(b)
-}
-
-func AddNewLine(certBytes []byte) (output []byte) {
-	output = []byte(string(certBytes) + "\n")
 	return
 }
