@@ -18,7 +18,9 @@ package main
 
 import (
 	"flag"
+	"log"
 	"os"
+	"strings"
 	"time"
 
 	capi "k8s.io/api/certificates/v1beta1"
@@ -32,7 +34,10 @@ import (
 
 	"github.com/gopaltirupur/appviewx-signer/controllers"
 	"github.com/gopaltirupur/appviewx-signer/internal/kubernetes/signer"
+	"github.com/gopaltirupur/appviewx-signer/internal/signer/appviewx"
 )
+
+var releaseVersion string = "1.0 (20210302202000)"
 
 var (
 	scheme   = runtime.NewScheme()
@@ -40,12 +45,14 @@ var (
 )
 
 func init() {
+	log.Printf("Version : %s\n", releaseVersion)
 	_ = capi.AddToScheme(scheme)
 	_ = corev1.AddToScheme(scheme)
 	// +kubebuilder:scaffold:scheme
 }
 
 func main() {
+
 	var metricsAddr string
 	var enableLeaderElection bool
 	var leaderElectionID string
@@ -57,15 +64,16 @@ func main() {
 
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
-		"Enable leader election for controller manager. "+
-			"Enabling this will ensure there is only one active controller manager.")
+		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&leaderElectionID, "leader-election-id", "signer-ca-leader-election",
 		"The name of the configmap used to coordinate leader election between controller-managers.")
 	flag.StringVar(&signerName, "signer-name", "example.com/foo", "Only sign CSR with this .spec.signerName.")
 	flag.StringVar(&caCertPath, "ca-cert-path", "/etc/pki/example.com/foo/ca.pem", "Sign CSR with this certificate file.")
 	flag.StringVar(&caKeyPath, "ca-key-path", "/etc/pki/example.com/foo/ca-key.pem", "Sign CSR with this private key file.")
 	flag.DurationVar(&certificateDuration, "certificate-duration", time.Hour, "The duration of the signed certificates.")
-	flag.BoolVar(&debugLogging, "debug-logging", true, "Enable debug logging.")
+
+	//TODO: make debug-logging configurable
+	flag.BoolVar(&debugLogging, "debug-logging", strings.ToLower(os.Getenv("LOG_LEVEL")) == "debug", "Enable debug logging.")
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(debugLogging)))
@@ -94,10 +102,12 @@ func main() {
 		SignerName:    signerName,
 		Signer:        signer,
 		EventRecorder: mgr.GetEventRecorderFor("CSRSigningReconciler"),
+		ApViewXSigner: &appviewx.ApViewXSigner{
+			Log: ctrl.Log.WithName("signer").WithName("appviewx").WithName("Signer"),
+		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create Controller", "controller", "CSRSigningReconciler")
 		os.Exit(1)
-
 	}
 	// +kubebuilder:scaffold:builder
 

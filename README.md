@@ -145,3 +145,7 @@ Run the below shell script.
 ./mTLSexternalcertvalidation.sh
 ```
 
+
+
+
+tar -cvzf ./01-Apr-2021-12\:43\:51.tar.gz 01-Apr-2021-12\:43\:51/

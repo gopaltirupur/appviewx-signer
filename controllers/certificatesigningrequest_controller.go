@@ -18,21 +18,47 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	nativelog "log"
-	"strings"
+	"log"
+	"os"
+	"strconv"
+	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/google/uuid"
 	capi "k8s.io/api/certificates/v1beta1"
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 
-	"github.com/gopaltirupur/appviewx-signer/appviewx"
 	capihelper "github.com/gopaltirupur/appviewx-signer/internal/api"
 	"github.com/gopaltirupur/appviewx-signer/internal/kubernetes/signer"
+	"github.com/gopaltirupur/appviewx-signer/internal/signer/appviewx"
+)
+
+var appviewxMode string
+var concurrentReconciles = 5
+
+func init() {
+	appviewxMode = os.Getenv("APPVIEWX_MODE")
+	if os.Getenv("CONCURRENT_RECONCILE") != "" {
+		var err error
+		concurrentReconciles, err = strconv.Atoi(os.Getenv("CONCURRENT_RECONCILE"))
+		if err != nil {
+			log.Fatalf("Error in parsing the CONCURRENT_RECONCILE")
+		}
+	}
+	log.Printf("CONCURRENT_RECONCILE is set to : %d\n", concurrentReconciles)
+}
+
+const (
+	retryInSeconds      = 1
+	EXTERNAL_REQUEST_ID = "certificates.k8s.io/externalRequestId"
 )
 
 // CertificateSigningRequestSigningReconciler reconciles a CertificateSigningRequest object
@@ -43,28 +69,32 @@ type CertificateSigningRequestSigningReconciler struct {
 	SignerName    string
 	Signer        *signer.Signer
 	EventRecorder record.EventRecorder
+	ApViewXSigner *appviewx.ApViewXSigner
 }
 
 // +kubebuilder:rbac:groups=certificates.k8s.io,resources=certificatesigningrequests,verbs=get;list;watch
 // +kubebuilder:rbac:groups=certificates.k8s.io,resources=certificatesigningrequests/status,verbs=patch
 // +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
 
-func (r *CertificateSigningRequestSigningReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	ctx := context.Background()
+func (r *CertificateSigningRequestSigningReconciler) Reconcile(req ctrl.Request) (result ctrl.Result, err error) {
+
+	ctx := context.WithValue(context.Background(), "name", req.NamespacedName)
 	log := r.Log.WithValues("certificatesigningrequest", req.NamespacedName)
+
+	defer func() {
+		r := recover()
+		if r != nil {
+			err = errors.New("recovery error at Reconcile")
+			log.V(1).Info(fmt.Sprintf("Error - recovered from a panic : %+v", r))
+		}
+	}()
+
 	var csr capi.CertificateSigningRequest
 	if err := r.Client.Get(ctx, req.NamespacedName, &csr); client.IgnoreNotFound(err) != nil {
 		return ctrl.Result{}, fmt.Errorf("error %q getting CSR", err)
 	}
 	log.V(1).Info(fmt.Sprintf("csr.DeletionGracePeriodSeconds : %d", csr.DeletionGracePeriodSeconds))
 	switch {
-	// case csr.DeletionGracePeriodSeconds == nil || *csr.DeletionGracePeriodSeconds == 0:
-	// 	log.V(1).Info(fmt.Sprintf("********************* csr.DeletionGracePeriodSeconds : %d", csr.DeletionGracePeriodSeconds))
-	// 	var newGracePeriod int64 = 60
-	// 	patch := client.MergeFrom(csr.DeepCopy())
-	// 	csr.DeletionGracePeriodSeconds = &newGracePeriod
-	// 	r.Client.Status().Patch(ctx, &csr, patch)
-	// 	log.V(1).Info(fmt.Sprintf("********************* csr.DeletionGracePeriodSeconds : %d", *csr.DeletionGracePeriodSeconds))
 	case !csr.DeletionTimestamp.IsZero():
 		log.V(1).Info("CSR has been deleted. Ignoring.")
 	case csr.Spec.SignerName == nil:
@@ -76,45 +106,115 @@ func (r *CertificateSigningRequestSigningReconciler) Reconcile(req ctrl.Request)
 	case !capihelper.IsCertificateRequestApproved(&csr):
 		log.V(1).Info("CSR is not approved, Ignoring.")
 	default:
-		log.V(1).Info("Signing")
-		// /////////////////////////////////////////////////////////////////////////////
-		// if csr.DeletionGracePeriodSeconds != nil {
-		// 	log.V(1).Info(fmt.Sprintf("********************* v csr.DeletionGracePeriodSeconds : %d", *csr.DeletionGracePeriodSeconds))
-		// } else {
-		// 	log.V(1).Info(fmt.Sprintf("********************* p csr.DeletionGracePeriodSeconds : %d", csr.DeletionGracePeriodSeconds))
-		// }
-		// var newGracePeriod int64 = 60
-		// patch := client.MergeFrom(csr.DeepCopy())
-		// csr.DeletionGracePeriodSeconds = &newGracePeriod
-		// r.Client.Status().Patch(ctx, &csr, patch)
-		// log.V(1).Info(fmt.Sprintf("********************* csr.DeletionGracePeriodSeconds : %d", *csr.DeletionGracePeriodSeconds))
-		/////////////////////////////////////////////////////////////////////////////
-		x509cr, err := capihelper.ParseCSR(csr.Spec.Request)
-		if err != nil {
-			log.Error(err, "unable to parse csr")
-			r.EventRecorder.Event(&csr, v1.EventTypeWarning, "SigningFailed", "Unable to parse the CSR request")
-			return ctrl.Result{}, nil
-		}
-		// cert, err := r.Signer.Sign(x509cr, csr.Spec.Usages)
-		cert, err := appviewx.MakeCallToAppViewXAndGetCertificate(ctx, x509cr, nil)
-		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("error auto signing csr: %v", err)
-		}
-		// //TODO: - TO REMOVE
-		// cert := getHardCodedCertificate()
-		// nativelog.Println(x509cr)
-		// /////////////////////////
 
-		//TODO: - TO CHECK
-		// cert = []byte(convertSliceStringToString(getCertificateCertChain(ctx,r,string(cert))))
+		if appviewxMode == "SYNC" {
+			log.V(1).Info("Signing - Sync")
 
-		nativelog.Printf("******************* certPem : " + string(cert))
-		patch := client.MergeFrom(csr.DeepCopy())
-		csr.Status.Certificate = cert
-		if err := r.Client.Status().Patch(ctx, &csr, patch); err != nil {
-			return ctrl.Result{}, fmt.Errorf("error patching CSR: %v", err)
+			//TODO: make configurable
+			//Don't consider csr if it is old
+			// if time.Now().After(csr.CreationTimestamp.Time.Add(time.Second * 6).Add(time.Millisecond * 500)) {
+			// 	return ctrl.Result{Requeue: false}, fmt.Errorf("timeout not proceeding with enrollment")
+			// }
+
+			externalRequestID := uuid.New().String()
+			csrContents := string(csr.Spec.Request)
+			cert, _, err := r.ApViewXSigner.MakeCallToAppViewXAndGetCertificate(ctx, &csrContents, nil, true, externalRequestID, false)
+			if err != nil {
+				log.V(1).Info("Error in MakeCallToAppViewXAndGetCertificate ", "err", err, "externalRequestID", externalRequestID)
+				return ctrl.Result{Requeue: true}, fmt.Errorf("error in getting certificate : %v", err)
+			}
+			if cert == nil {
+				log.V(1).Info("Error in MakeCallToAppViewXAndGetCertificate - cert byte array is nil", "externalRequestID", externalRequestID)
+				return ctrl.Result{Requeue: true}, fmt.Errorf("cert byte array is nil")
+			}
+
+			//Don't go for patch if already late
+			// if time.Now().After(csr.CreationTimestamp.Time.Add(time.Second * 9).Add(time.Millisecond * 500)) {
+			// 	return ctrl.Result{Requeue: false}, fmt.Errorf("timeout not patching")
+			// }
+
+			patch := client.MergeFrom(csr.DeepCopy())
+			csr.Status.Certificate = cert
+			if err := r.Client.Status().Patch(ctx, &csr, patch); err != nil {
+				return ctrl.Result{}, fmt.Errorf("error patching CSR: %v", err)
+			}
+			log.V(1).Info("Signing - Sync - Success", "externalRequestID", externalRequestID)
+			r.EventRecorder.Event(&csr, v1.EventTypeNormal, "Signed", "The CSR has been signed")
+
+		} else if appviewxMode == "ASYNC" {
+
+			switch {
+			case csr.Annotations[EXTERNAL_REQUEST_ID] == "":
+				log.V(1).Info("Signing - Async")
+
+				//TODO: make configurable
+				//Don't consider csr if it is old
+				// if time.Now().After(csr.CreationTimestamp.Time.Add(time.Second * 6).Add(time.Millisecond * 500)) {
+				// 	return ctrl.Result{Requeue: false}, fmt.Errorf("timeout not proceeding with enrollment")
+				// }
+
+				externalRequestID := uuid.New().String()
+				csrContents := string(csr.Spec.Request)
+				_, _, err = r.ApViewXSigner.MakeCallToAppViewXAndGetCertificate(ctx, &csrContents, nil, false, externalRequestID, false)
+				if err != nil {
+					log.V(1).Info("Error in MakeCallToAppViewXAndGetCertificate - Call 1 ", "err", err, "externalRequestID", externalRequestID)
+					return ctrl.Result{Requeue: true}, fmt.Errorf("Error in async certificate")
+				}
+
+				//Don't go for patch if already late
+				// if time.Now().After(csr.CreationTimestamp.Time.Add(time.Second * 9).Add(time.Millisecond * 500)) {
+				// 	return ctrl.Result{Requeue: false}, fmt.Errorf("timeout not patching")
+				// }
+
+				patch := client.MergeFrom(csr.DeepCopy())
+
+				metav1.SetMetaDataAnnotation(&csr.ObjectMeta, EXTERNAL_REQUEST_ID, externalRequestID)
+
+				if err := r.Client.Status().Patch(ctx, &csr, patch); err != nil {
+					return ctrl.Result{}, fmt.Errorf("Error in patching CSR with the externalRequestID : %v", err)
+				}
+				log.V(1).Info("Signing - Async - Success", "externalRequestID", externalRequestID)
+
+			default:
+
+				externalRequestID := csr.Annotations[EXTERNAL_REQUEST_ID]
+				log.V(1).Info(fmt.Sprintf("Picking up with externalResourceID %s", externalRequestID))
+
+				//TODO: make configurable
+				//Don't consider csr if it is old
+				// if time.Now().After(csr.CreationTimestamp.Time.Add(time.Second * 8).Add(time.Millisecond * 500)) {
+				// 	return ctrl.Result{Requeue: false}, fmt.Errorf("timeout not proceeding with enrollment")
+				// }
+
+				cert, _, err := r.ApViewXSigner.MakeCallToAppViewXAndGetCertificate(ctx, nil, nil, true, externalRequestID, true)
+				if err != nil {
+					log.V(1).Info("Error in MakeCallToAppViewXAndGetCertificate - Call 2", "err", err, "externalRequestID", externalRequestID)
+					return ctrl.Result{Requeue: false}, fmt.Errorf("error in getting certificate : %v", err)
+				}
+				if len(cert) == 0 {
+					log.V(1).Info(fmt.Sprintf("Certificate not generated : will retry again : %v", err), "externalRequestID", externalRequestID)
+					return ctrl.Result{RequeueAfter: time.Second * retryInSeconds}, fmt.Errorf("Certificate not generated ")
+				}
+
+				//Don't go for patch if already late
+				// if time.Now().After(csr.CreationTimestamp.Time.Add(time.Second * 9).Add(time.Millisecond * 500)) {
+				// 	log.V(1).Info("Time out not patching the certificate", "externalRequestID", externalRequestID)
+				// 	return ctrl.Result{Requeue: false}, fmt.Errorf("timeout not patching")
+				// }
+				log.V(1).Info("patching the certificate", "externalRequestID", externalRequestID)
+
+				patch := client.MergeFrom(csr.DeepCopy())
+				delete(csr.Annotations, EXTERNAL_REQUEST_ID)
+				csr.Status.Certificate = cert
+				if err := r.Client.Status().Patch(ctx, &csr, patch); err != nil {
+					return ctrl.Result{}, fmt.Errorf("Error in patching the CSR with the certificate : %v", err)
+				}
+				log.V(1).Info("Picking up with externalResourceID - Success", "externalRequestID", externalRequestID)
+				r.EventRecorder.Event(&csr, v1.EventTypeNormal, "Signed", "The CSR has been signed")
+			}
+		} else {
+			panic("APPVIEWX_MODE should be SYNC or ASYNC")
 		}
-		r.EventRecorder.Event(&csr, v1.EventTypeNormal, "Signed", "The CSR has been signed")
 	}
 	return ctrl.Result{}, nil
 }
@@ -122,78 +222,6 @@ func (r *CertificateSigningRequestSigningReconciler) Reconcile(req ctrl.Request)
 func (r *CertificateSigningRequestSigningReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&capi.CertificateSigningRequest{}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: concurrentReconciles}).
 		Complete(r)
-}
-
-func getHardCodedCertificate() []byte {
-
-	return []byte(`
------BEGIN CERTIFICATE-----
-MIIDjDCCAnSgAwIBAgIUPWKB7m/fYqvlsSzA8mvLK/qmnUswDQYJKoZIhvcNAQEL
-BQAwFTETMBEGA1UEAwwKTkVXIFNVQiBDQTAeFw0yMTAyMDIwMjEzMjZaFw0yMTAy
-MDIwMzEzMjZaMAsxCTAHBgNVBAoTADCCASIwDQYJKoZIhvcNAQEBBQADggEPADCC
-AQoCggEBANVZA2T6hFVfvuwvIszKPCeJvZJZ1tGpoO3xGvvEC6/fwsyN9PRGgZo+
-tpB58e8KSqj3DWDVQnAQQ5XwQItTIf1VAcQz5e+dhI49BmJjTvc5fndeRpSNhD5K
-QIEr4hvuLjwfrM4hR1C4df0VCgI2xXBtMDXEuHn7VXbX+Fubbjt2NL0VXNs58twI
-DhQ4/zbqjFghUW276nHHcftN7AUSEwwxDSvrtWiL51jG1Ar8qnbrIon5NYwLO/G9
-5VTAUAkqod53f6Aik/pQmdnDWSJt36e3UGxCb835jaJ2ebW3udh4wKDpEO7m4h5U
-h3fo74dIW8GUFmjr43zeOijtZ8pKBlUCAwEAAaOB3TCB2jAMBgNVHRMBAf8EAjAA
-MB8GA1UdIwQYMBaAFBIqE1aJ+S7ZJ/J8GiQv4CjOmYnkMFsGA1UdEQEB/wRRME+G
-TXNwaWZmZTovL2NsdXN0ZXIubG9jYWwvbnMvaXN0aW8tc3lzdGVtL3NhL2lzdGlv
-LWVncmVzc2dhdGV3YXktc2VydmljZS1hY2NvdW50MB0GA1UdJQQWMBQGCCsGAQUF
-BwMCBggrBgEFBQcDATAdBgNVHQ4EFgQU4Q7rEgUySSOWVLkCw/GltNAtOnAwDgYD
-VR0PAQH/BAQDAgXgMA0GCSqGSIb3DQEBCwUAA4IBAQBVE5WtrRD2Vk/xtp8YkyOR
-mZ1rN92yZqIGyvGTDWSFre5VfuWxCAEbJ+nulwudKp1whu8QIvUQUOcSNcH1YqTO
-A1DJl5fNDqmmlTZzLsMGNai/zup/4E/0cChRWsO9Py46II+PKZD35mvrpcgLAfuu
-poU7Rp1wFmBOYcfhEhaB/1iMYpposIHBoxKMrsBnDdhJfWW4V2sdZ3Vy5/jPDo/Q
-MTLGVjxdkO64+NP1RjO5SyNT423lNaZrmiQpN14iO4GdoqGPodNBkQdbjiZmRLJ4
-Fy3GZbR9OqqWbT8+moKut0zaH31s7pQkOaSNJsXdswd8k0ickDfuD6occZpD7Sq/
------END CERTIFICATE-----`)
-
-}
-
-func getCertificateCertChain(ctx context.Context, r *CertificateSigningRequestSigningReconciler,certificateResponse string) (output []string) {
-	log := r.Log.WithValues("getCertificateCertChain")
-
-	log.V(1).Info("Executing getCertificateCertChain")
-	output = []string{}
-	certificateResponseSplit := strings.Split(certificateResponse, "-----END CERTIFICATE-----")
-	log.V(1).Info(fmt.Sprintf("certificateResponseSplit - length : %d", len(certificateResponseSplit)))
-
-	// for i, currentcertificate := range certificateResponseSplit {
-	// 	log.Printf("**** i = : %d : length : %d ", i, len(currentcertificate))
-	// 	currentcertificate = strings.Trim(currentcertificate, " ")
-	// 	currentcertificate = strings.Trim(currentcertificate, "\n")
-	// 	currentcertificate = strings.Trim(currentcertificate, " ")
-	// 	if len(currentcertificate) > 0 {
-	// 		currentcertificate = currentcertificate + "\n-----END CERTIFICATE-----"
-	// 		output = append(output, currentcertificate)
-	// 	}
-	// }
-
-	length := len(certificateResponseSplit)
-	// for i := length - 1; i >= 0; i-- {
-	for i := 0; i < length; i++ {
-
-		currentcertificate := strings.Trim(certificateResponseSplit[i], " ")
-		currentcertificate = strings.Trim(currentcertificate, "\n")
-		currentcertificate = strings.Trim(currentcertificate, " ")
-
-		log.V(1).Info(fmt.Sprintf("i = : %d : length : %d ", i, len(currentcertificate)))
-		if len(currentcertificate) > 0 {
-			currentcertificate = currentcertificate + "\n-----END CERTIFICATE-----\n"
-			output = append(output, currentcertificate)
-		}
-	}
-
-	log.V(1).Info(fmt.Sprintf("output Length : %d", len(output)))
-	return
-}
-
-func convertSliceStringToString(input []string)string{
-	output := ""
-	for _,currentcertificate := range input{
-		output = (currentcertificate+"\n")
-	}
-	return output
 }

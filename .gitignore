@@ -5,7 +5,6 @@
 *.dll
 *.so
 *.dylib
-bin
 
 # Test binary, build with `go test -c`
 *.test
@@ -21,7 +20,6 @@ bin
 .idea
 *.swp
 *.swo
-*~
 config/e2e/tls.crt
 config/e2e/tls.csr
 main
@@ -29,6 +27,5 @@ docs/demos/signer-ca.demo1.cast
 docs/demos/kubelet-signer/kubelet-signer-demo.cast
 manager
 config/e2e/tls.key
-config/e2e/kustomization.yaml
-*.yaml
 .vscode/settings.json
+build

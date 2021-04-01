@@ -15,4 +15,4 @@ patchesStrategicMerge:
 images:
 - name: controller
   newName: appviewx-istio/appviewx-signer/controller
-  newTag: 44aec27-dirty
+  newTag: "1.0"
