@@ -16,6 +16,7 @@ Before configuring the AppViewX-Istio K8s signer, the below prerequisites should
 
  - [ ] Cluster running Kubernetes with 1.18+ version.
  - [ ] Download and Install Istio version 1.8+.
+ - [ ]  GO version 1.16 and above
  - [ ] Signup for [AppViewX account](https://www.appviewx.com/resources/cert-start-your-trial/)
 
 > Note : Existing customers reach us @ help@appviewx.com
@@ -31,17 +32,38 @@ Installation Steps
      git clone https://github.com/AppViewX/appviewx-signer.git
 	   ```
 
+- Change the working directory to **appviewx-signer** and build the appviewx-signer binary.
+	```bash
+	cd <installdirectory>/appviewx-signer/ 
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -a -o manager main.go;
+	```
+
 -   Change the working directory to **demo**  and update the AppViewX Instance credentials and host details on the appviewx.env file.
     ```bash
      cd <installdirectory>/appviewx-signer/demo/
     ```
     > Note : Host details and credentials will be shared upon signup / registration.
-
+ 
+- Create a kubernetes secret with the AppViewX environment and credentials.
+	```bash
+	kubectl create secret generic appviewx-credentials -n signer-ca-system --from-env-file=./appviewx.env;
+	```
+- Change the working directory to **appviewx-signer** and build and deploy the appviewx-signer docker image.
+	```bash
+	 cd <installdirectory>/appviewx-signer/;
+	 make docker-build deploy-e2e DOCKER_PREFIX=appviewx-istio/appviewx-signer/ DOCKER_TAG=1.0;
+	 ```
+	
 - Create a kubernetes secret to host the Signing Certificate Authority by concatenating the Root CA and the Intermediate CA to base64 format.
   ```bash
    cat <installdirectory>/appviewx-signer/demo/RootCA.crt <installdirectory>/appviewx-signer/demo/SUBCA.crt | base64
   ```
   > Note : Example base64 content file  **base64example.txt**  available in the demo directory.
+-  Change the working directory to **demo** .
+    ```bash
+     cd <installdirectory>/appviewx-signer/demo/
+     ```
+    
 -   Copy the base64 content and insert in an external-ca-cert.yaml file as below.
 	  ```bash
 	apiVersion: v1
@@ -144,4 +166,3 @@ Run the below shell script.
 ```bash
 ./mTLSexternalcertvalidation.sh
 ```
-
