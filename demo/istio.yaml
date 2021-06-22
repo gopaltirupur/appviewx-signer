@@ -14,7 +14,7 @@ spec:
                   apiGroups:
                   - certificates.k8s.io
                   resourceNames:
-                  - example.com/foo     #Replace Signer Name
+                  - profile.appviewx.com/istio     #Replace Signer Name
                   resources:
                   - signers
                   verbs:
@@ -28,7 +28,7 @@ spec:
             value: ISTIOD_RA_KUBERNETES_API
           # Indicate to Istiod the external k8s Signer Name
           - name: K8S_SIGNER
-            value: example.com/foo     #Repalce Signer Name
+            value: profile.appviewx.com/istio     #Repalce Signer Name
         overlays:
         - kind: Deployment
           name: istiod

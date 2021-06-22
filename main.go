@@ -67,15 +67,16 @@ func main() {
 		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&leaderElectionID, "leader-election-id", "signer-ca-leader-election",
 		"The name of the configmap used to coordinate leader election between controller-managers.")
-	flag.StringVar(&signerName, "signer-name", "example.com/foo", "Only sign CSR with this .spec.signerName.")
-	flag.StringVar(&caCertPath, "ca-cert-path", "/etc/pki/example.com/foo/ca.pem", "Sign CSR with this certificate file.")
-	flag.StringVar(&caKeyPath, "ca-key-path", "/etc/pki/example.com/foo/ca-key.pem", "Sign CSR with this private key file.")
+	flag.StringVar(&signerName, "signer-name", "profile.appviewx.com/istio", "Only sign CSR with this .spec.signerName.")
+	flag.StringVar(&caCertPath, "ca-cert-path", "/etc/pki/profile.appviewx.com/istio/ca.pem", "Sign CSR with this certificate file.")
+	flag.StringVar(&caKeyPath, "ca-key-path", "/etc/pki/profile.appviewx.com/istio/ca-key.pem", "Sign CSR with this private key file.")
 	flag.DurationVar(&certificateDuration, "certificate-duration", time.Hour, "The duration of the signed certificates.")
 
 	//TODO: make debug-logging configurable
 	flag.BoolVar(&debugLogging, "debug-logging", strings.ToLower(os.Getenv("LOG_LEVEL")) == "debug", "Enable debug logging.")
 	flag.Parse()
 
+	log.Println("signerName : ", signerName)
 	ctrl.SetLogger(zap.New(zap.UseDevMode(debugLogging)))
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{

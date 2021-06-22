@@ -19,6 +19,6 @@ spec:
             secretName: signer-ca
             items:
               - key: tls.key
-                path: example.com/foo/ca-key.pem
+                path: profile.appviewx.com/istio/ca-key.pem
               - key: tls.crt
-                path: example.com/foo/ca.pem
+                path: profile.appviewx.com/istio/ca.pem

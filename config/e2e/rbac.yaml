@@ -6,7 +6,7 @@ rules:
 - apiGroups:
   - certificates.k8s.io
   resourceNames:
-  - example.com/foo
+  - profile.appviewx.com/istio
   resources:
   - signers
   verbs:
